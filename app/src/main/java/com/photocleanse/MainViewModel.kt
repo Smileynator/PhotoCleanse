@@ -21,6 +21,13 @@ import com.photocleanse.dupes.fullyDeletedGroups
 import com.photocleanse.dupes.toCandidate
 import com.photocleanse.review.clampBatchSize
 import com.photocleanse.review.ConfirmPlan
+import com.photocleanse.review.FilingSession
+import com.photocleanse.review.FolderEntry
+import com.photocleanse.review.FolderTree
+import com.photocleanse.review.Move
+import com.photocleanse.review.movePhotos
+import com.photocleanse.review.validFolderName
+import java.io.File
 import com.photocleanse.review.Decision
 import com.photocleanse.review.ReviewSession
 import com.photocleanse.review.deletePhotos
@@ -37,7 +44,7 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-enum class Screen { Start, Review, Confirm }
+enum class Screen { Start, Review, Confirm, Filing, FilingConfirm }
 
 /** Extra info shown in duplicate reviews. */
 data class DupMeta(
@@ -112,6 +119,164 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val del = plan.toDelete.map { it.id }.filter { it !in deselected }.toSet()
             return fullyDeletedGroups(groupOf, del).size
         }
+
+    // ---- filing kept photos into the photos folder ----
+
+    /** Folder kept photos are filed into; remembered between sessions. */
+    var photosRoot by mutableStateOf(settings.photosRoot?.takeIf { File(it).isDirectory }); private set
+
+    fun choosePhotosRoot(path: String) {
+        settings.photosRoot = path
+        photosRoot = path
+    }
+
+    val toFile: StateFlow<Int> = snapshotFlow { includeHidden }
+        .flatMapLatest { dao.toFileCount(if (it) 1 else 0) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    private var filing: FilingSession? = null
+    var filingPhotos by mutableStateOf<List<Photo>>(emptyList()); private set
+    val filingDestinations = mutableStateMapOf<Long, String>()
+    var filingIndex by mutableIntStateOf(0); private set
+    var filingCanUndo by mutableStateOf(false); private set
+    var filingUpcoming by mutableStateOf<List<String>>(emptyList()); private set
+    val filingCurrent get() = filingPhotos.getOrNull(filingIndex)
+
+    /** Folder currently shown in the filing grid. Deliberately survives from one photo to the next. */
+    var navDir by mutableStateOf<String?>(null); private set
+    /** Folder structure of the photos folder, scanned once per filing session; null while that scan runs. */
+    var folderTree by mutableStateOf<FolderTree?>(null); private set
+    /** Bumped whenever the folder structure changes so the grid re-reads the disk. */
+    var foldersVersion by mutableIntStateOf(0); private set
+    private var filingPlan: List<Move> = emptyList()
+    val filingMoves get() = filingPlan
+
+    fun startFiling() {
+        val root = photosRoot ?: return
+        if (busy) return
+        viewModelScope.launch {
+            val batch = dao.nextFileBatch(if (includeHidden) 1 else 0, batchLimit)
+            if (batch.isEmpty()) {
+                message = "No kept photos waiting to be filed."
+                return@launch
+            }
+            message = null
+            filingPhotos = batch
+            filing = FilingSession(batch)
+            navDir = root
+            folderTree = null
+            syncFiling()
+            screen = Screen.Filing
+            folderTree = withContext(Dispatchers.IO) { FolderTree.scan(root) }
+        }
+    }
+
+    fun folders(dir: String): List<FolderEntry> = folderTree?.children(dir, includeHidden) ?: emptyList()
+
+    fun openFolder(path: String) {
+        navDir = path
+    }
+
+    /** One level up, never above the photos folder. */
+    fun navUp() {
+        val root = photosRoot ?: return
+        val cur = navDir ?: return
+        if (cur != root) navDir = File(cur).parent?.takeIf { it.length >= root.length } ?: root
+    }
+
+    fun createFolder(name: String): Boolean {
+        val dir = navDir ?: return false
+        if (!validFolderName(name)) return false
+        val f = File(dir, name.trim())
+        val ok = f.isDirectory || f.mkdirs()
+        if (ok) {
+            folderTree?.add(dir, name.trim())
+            foldersVersion++
+        }
+        return ok
+    }
+
+    fun fileCurrentTo(destDir: String) {
+        val s = filing ?: return
+        s.assign(destDir)
+        if (s.finished) finishFiling() else syncFiling()
+    }
+
+    fun filingGoTo(index: Int) {
+        filing?.goTo(index)
+        syncFiling()
+    }
+
+    fun filingUndo() {
+        filing?.undo()
+        syncFiling()
+    }
+
+    fun filingSkipRest() {
+        filing?.skipRest()
+        finishFiling()
+    }
+
+    private fun syncFiling() {
+        val s = filing ?: return
+        filingIndex = s.index
+        filingCanUndo = s.canUndo
+        filingUpcoming = s.photos.drop(s.index + 1).take(3).map { it.path }
+        filingDestinations.clear()
+        filingDestinations.putAll(s.destinationsSnapshot())
+    }
+
+    private fun finishFiling() {
+        syncFiling()
+        filingPlan = filing!!.plan()
+        screen = Screen.FilingConfirm
+    }
+
+    fun backToFiling() {
+        if (busy) return
+        filing?.reopen()
+        syncFiling()
+        screen = Screen.Filing
+    }
+
+    fun cancelFiling() {
+        filing = null
+        filingPhotos = emptyList()
+        filingDestinations.clear()
+        filingPlan = emptyList()
+        folderTree = null
+        screen = Screen.Start
+    }
+
+    fun confirmFiling() {
+        if (busy) return
+        val moves = filingPlan
+        busy = true
+        viewModelScope.launch {
+            val failed = try {
+                withContext(Dispatchers.IO) {
+                    val outcome = movePhotos(moves)
+                    // Database only changes after the files have really been moved.
+                    dao.applyFiling(outcome.moved.map { it.photo.id to it.newPath })
+                    if (outcome.moved.isNotEmpty()) {
+                        MediaScannerConnection.scanFile(
+                            getApplication(),
+                            (outcome.moved.map { it.photo.path } + outcome.moved.map { it.newPath }).toTypedArray(),
+                            null, null,
+                        )
+                    }
+                    outcome.failed.size
+                }
+            } finally {
+                busy = false
+            }
+            message = buildString {
+                append("Filed ${moves.size - failed} photos.")
+                if (failed > 0) append(" $failed could not be moved and stay in the queue.")
+            }
+            cancelFiling()
+        }
+    }
 
     fun startScan() {
         if (scanJob?.isActive == true) return

@@ -63,7 +63,7 @@ class ReviewSessionTest {
         assertNull(s.current)
     }
 
-    @Test fun `undo steps back and forgets decision`() {
+    @Test fun `undo reverts the last decided photo and jumps to it`() {
         val s = ReviewSession(photos(3))
         s.decide(Decision.DELETE)
         assertTrue(s.canUndo)
@@ -75,7 +75,27 @@ class ReviewSessionTest {
         assertEquals(listOf(1L), ids(s.plan().approved))
     }
 
-    @Test fun `undo at start or after finish is a no-op`() {
+    @Test fun `undo targets the last decided photo even after jumping elsewhere`() {
+        val s = ReviewSession(photos(4))
+        s.decide(Decision.DELETE); s.decide(Decision.APPROVE) // 1, 2 decided; on 3
+        s.goTo(3) // looking at undecided 4
+        s.undo()
+        assertEquals(2L, s.current!!.id)
+        assertEquals(listOf(1L), ids(s.plan().toDelete))
+        assertTrue(s.plan().approved.isEmpty())
+    }
+
+    @Test fun `undo on a photo that already has a decision reverts that one`() {
+        val s = ReviewSession(photos(4))
+        s.decide(Decision.DELETE); s.decide(Decision.APPROVE); s.decide(Decision.DELETE) // 1,2,3 decided
+        s.goTo(0)
+        s.undo()
+        assertEquals(1L, s.current!!.id)
+        assertEquals(listOf(3L), ids(s.plan().toDelete))
+        assertEquals(listOf(2L), ids(s.plan().approved))
+    }
+
+    @Test fun `undo with nothing decided or after finish is a no-op`() {
         val s = ReviewSession(photos(1))
         s.undo()
         assertEquals(0, s.index)

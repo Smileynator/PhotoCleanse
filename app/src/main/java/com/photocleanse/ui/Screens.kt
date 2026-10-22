@@ -84,6 +84,8 @@ fun StartScreen(vm: MainViewModel, onRescan: () -> Unit) {
     val analysis by vm.analysis.collectAsState()
     val dupGroups by vm.dupGroups.collectAsState()
     var confirmReset by remember { mutableStateOf(false) }
+    var pickFolder by remember { mutableStateOf(false) }
+    val toFile by vm.toFile.collectAsState()
     val available = if (vm.includeHidden) counts.remaining else counts.remaining - counts.hiddenRemaining
 
     Column(
@@ -110,6 +112,12 @@ fun StartScreen(vm: MainViewModel, onRescan: () -> Unit) {
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+                Spacer(Modifier.height(6.dp))
+                Button(
+                    onClick = vm::startBatch,
+                    enabled = available > 0,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) { Text("Start cleaning") }
             }
         }
 
@@ -140,6 +148,24 @@ fun StartScreen(vm: MainViewModel, onRescan: () -> Unit) {
                         "Analysing for duplicates… ${fmt(analysis.done)} / ${fmt(analysis.total)}",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                }
+            }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("${fmt(toFile)} kept photos to file", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            vm.photosRoot?.let { "Into $it" } ?: "Choose your photos folder first",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    OutlinedButton(onClick = vm::startFiling, enabled = toFile > 0 && vm.photosRoot != null) { Text("File") }
+                }
+                TextButton(onClick = { pickFolder = true }) {
+                    Text(if (vm.photosRoot == null) "Choose photos folder…" else "Change photos folder…")
                 }
             }
         }
@@ -179,18 +205,21 @@ fun StartScreen(vm: MainViewModel, onRescan: () -> Unit) {
 
         vm.message?.let { Text(it, color = MaterialTheme.colorScheme.primary) }
 
-        Button(
-            onClick = vm::startBatch,
-            enabled = available > 0,
-            modifier = Modifier.fillMaxWidth().height(56.dp),
-        ) { Text("Start cleaning (next ${minOf(available, vm.batchLimit)})") }
-
         OutlinedButton(onClick = onRescan, enabled = !scan.running, modifier = Modifier.fillMaxWidth()) {
             Text("Rescan device")
         }
         TextButton(onClick = { confirmReset = true }, modifier = Modifier.fillMaxWidth()) {
             Text("Reset reviewed status…")
         }
+    }
+
+    if (pickFolder) {
+        FolderPickerDialog(
+            initial = vm.photosRoot,
+            showHidden = vm.includeHidden,
+            onPick = { vm.choosePhotosRoot(it); pickFolder = false },
+            onDismiss = { pickFolder = false },
+        )
     }
 
     if (confirmReset) {

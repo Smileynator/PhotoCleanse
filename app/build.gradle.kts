@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -13,15 +15,32 @@ android {
         applicationId = "com.photocleanse"
         minSdk = 26
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.0.4"
+        versionCode = 6
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    // Local, git-ignored signing.properties (storeFile, storePassword, keyAlias, keyPassword). Debug and release
+    // builds share this key so one installs over the other; without the file Gradle's defaults are used.
+    val signingProps = rootProject.file("signing.properties").takeIf { it.exists() }
+        ?.let { f -> Properties().apply { f.inputStream().use { load(it) } } }
+    val appSigning = signingProps?.let {
+        signingConfigs.create("app") {
+            storeFile = file(it.getProperty("storeFile"))
+            storePassword = it.getProperty("storePassword")
+            keyAlias = it.getProperty("keyAlias")
+            keyPassword = it.getProperty("keyPassword")
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            appSigning?.let { signingConfig = it }
+        }
+        debug {
+            appSigning?.let { signingConfig = it }
         }
     }
     compileOptions {

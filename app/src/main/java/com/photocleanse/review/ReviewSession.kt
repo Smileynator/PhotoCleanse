@@ -32,6 +32,7 @@ data class Resolution(val delete: List<Photo>, val markDone: List<Photo>)
  */
 class ReviewSession(val photos: List<Photo>) {
     private val decisions = HashMap<Long, Decision>()
+    private val history = ArrayList<Long>() // photo ids in the order they were decided, newest last
 
     var index: Int = 0
         private set
@@ -40,7 +41,7 @@ class ReviewSession(val photos: List<Photo>) {
 
     val size get() = photos.size
     val current: Photo? get() = if (finished) null else photos[index]
-    val canUndo get() = !finished && index > 0
+    val canUndo get() = !finished && decisions.isNotEmpty()
 
     fun decisionOf(id: Long): Decision? = decisions[id]
     fun decisionsSnapshot(): Map<Long, Decision> = HashMap(decisions)
@@ -48,6 +49,8 @@ class ReviewSession(val photos: List<Photo>) {
     fun decide(decision: Decision) {
         val p = current ?: return
         decisions[p.id] = decision
+        history.remove(p.id)
+        history += p.id
         val next = (1..size).map { (index + it) % size }.firstOrNull { photos[it].id !in decisions }
         if (next == null) finished = true else index = next
     }
@@ -65,11 +68,16 @@ class ReviewSession(val photos: List<Photo>) {
         if (photos.isNotEmpty()) finished = false
     }
 
-    /** Steps back one photo and forgets its decision. */
+    /**
+     * Forgets one decision and jumps to that photo: the current photo's own decision if it has one (the user went
+     * back to it on purpose), otherwise the most recently decided photo.
+     */
     fun undo() {
         if (!canUndo) return
-        index--
-        decisions.remove(photos[index].id)
+        val id = current?.id?.takeIf { it in decisions } ?: history.last()
+        decisions.remove(id)
+        history.remove(id)
+        index = photos.indexOfFirst { it.id == id }
     }
 
     fun plan(): ConfirmPlan = ConfirmPlan(

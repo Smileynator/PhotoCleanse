@@ -39,6 +39,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.photocleanse.ui.ConfirmScreen
+import com.photocleanse.ui.FilingConfirmScreen
+import com.photocleanse.ui.FilingScreen
 import com.photocleanse.ui.ReviewScreen
 import com.photocleanse.ui.StartScreen
 import com.photocleanse.ui.systemBarsPaddingCompat
@@ -79,6 +81,8 @@ class MainActivity : ComponentActivity() {
             Screen.Start -> StartScreen(vm, onRescan = vm::startScan)
             Screen.Review -> ReviewScreen(vm)
             Screen.Confirm -> ConfirmScreen(vm)
+            Screen.Filing -> FilingScreen(vm)
+            Screen.FilingConfirm -> FilingConfirmScreen(vm)
         }
     }
 

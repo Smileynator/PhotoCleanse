@@ -17,7 +17,8 @@ import com.photocleanse.dupes.Candidate
 import kotlinx.coroutines.flow.Flow
 
 const val STATUS_NEW = 0
-const val STATUS_DONE = 1
+const val STATUS_DONE = 1 // reviewed and kept, waiting to be filed into the photos folder
+const val STATUS_FILED = 2 // moved into the photos folder
 
 @Entity(
     tableName = "photos",
@@ -123,12 +124,31 @@ abstract class PhotoDao {
     @Query("UPDATE photos SET status = 1 WHERE id IN (:ids)")
     abstract suspend fun markDone(ids: List<Long>)
 
-    @Query("UPDATE photos SET status = 0")
+    /** Kept photos that have not been filed yet, newest first. */
+    @Query(
+        "SELECT * FROM photos WHERE status = 1 AND (:includeHidden = 1 OR hidden = 0) " +
+            "ORDER BY modified DESC, id ASC LIMIT :limit",
+    )
+    abstract suspend fun nextFileBatch(includeHidden: Int, limit: Int): List<Photo>
+
+    @Query("SELECT COUNT(*) FROM photos WHERE status = 1 AND (:includeHidden = 1 OR hidden = 0)")
+    abstract fun toFileCount(includeHidden: Int): Flow<Int>
+
+    /** REPLACE only ever drops a stale row for a file that is no longer there; the unique path stays unique. */
+    @Query("UPDATE OR REPLACE photos SET path = :path, status = 2 WHERE id = :id")
+    abstract suspend fun markFiled(id: Long, path: String)
+
+    @Transaction
+    open suspend fun applyFiling(moved: List<Pair<Long, String>>) {
+        for ((id, path) in moved) markFiled(id, path)
+    }
+
+    @Query("UPDATE photos SET status = 0 WHERE status = 1")
     abstract suspend fun resetStatuses()
 
     @Query(
         "SELECT COUNT(*) AS total, " +
-            "COALESCE(SUM(status = 1), 0) AS done, " +
+            "COALESCE(SUM(status >= 1), 0) AS done, " +
             "COALESCE(SUM(status = 0), 0) AS remaining, " +
             "COALESCE(SUM(status = 0 AND hidden = 1), 0) AS hiddenRemaining " +
             "FROM photos",

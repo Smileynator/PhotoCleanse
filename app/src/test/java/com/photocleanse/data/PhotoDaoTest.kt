@@ -81,5 +81,16 @@ class PhotoDaoTest {
         dao.deleteByIds(listOf(dao.idPaths().first { it.path == "/a" }.id))
         assertEquals(listOf("/b"), dao.idPaths().map { it.path })
     }
-}
 
+    @Test fun filingQueueAndMarkFiled() = runBlocking {
+        dao.insertAll(listOf(p("/new"), p("/kept", status = STATUS_DONE)))
+        assertEquals(listOf("/kept"), dao.nextFileBatch(1, 30).map { it.path })
+        val id = dao.nextFileBatch(1, 30).single().id
+        dao.applyFiling(listOf(id to "/Photos/Trips/kept.jpg"))
+        assertEquals(0, dao.nextFileBatch(1, 30).size)
+        assertEquals(listOf("/new"), dao.nextBatch(1, 30).map { it.path })
+        assertEquals(1, dao.counts().first().done) // filed counts as done
+        dao.resetStatuses() // filed photos stay filed
+        assertEquals(0, dao.nextFileBatch(1, 30).size)
+    }
+}
